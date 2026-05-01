@@ -4,12 +4,14 @@
 #
 # What it does (idempotent — re-run is safe):
 #   1. Installs Docker + compose plugin if missing
-#   2. Prompts for worker token, GHCR PAT, and (optional) MinIO creds
-#   3. Writes /opt/scrappy/worker.env (mode 600)
-#   4. Writes /opt/scrappy/docker-compose.yml (worker + watchtower)
-#   5. docker login ghcr.io with the PAT
-#   6. docker compose pull && up -d
-#   7. Tails the worker log briefly to confirm boot
+#   2. Prompts for a Scrappy worker token (the only secret you type)
+#   3. Calls api.scrappy.hu/v1/internal/bootstrap with that token to fetch
+#      GHCR pull credentials — workers never need direct S3 / registry creds
+#   4. Writes /opt/scrappy/worker.env (mode 600)
+#   5. Writes /opt/scrappy/docker-compose.yml (worker + watchtower)
+#   6. docker login ghcr.io with the bootstrap-issued PAT
+#   7. docker compose pull && up -d
+#   8. Tails the worker log briefly to confirm boot
 #
 # After the first run, no manual updates are needed: Watchtower polls GHCR
 # every 5 min and rolls the container automatically when a new image lands.
@@ -18,10 +20,7 @@
 #   sudo ./install-worker.sh
 #
 # Or non-interactively (useful for re-runs / config management):
-#   sudo WORKER_TOKEN=wk_live_... GHCR_USER=kevin GHCR_PAT=ghp_... \
-#        S3_ENDPOINT=https://... S3_BUCKET_SCREENSHOTS=... \
-#        S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
-#        ./install-worker.sh
+#   sudo WORKER_TOKEN=wk_live_... ./install-worker.sh
 
 set -euo pipefail
 
@@ -41,15 +40,6 @@ step()  { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 ok()    { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
 fail()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
-
-prompt_required() {
-  local var=$1 desc=$2
-  if [[ -z "${!var:-}" ]]; then
-    read -rp "  ${desc}: " val
-    [[ -n "$val" ]] || fail "${desc} is required"
-    printf -v "$var" '%s' "$val"
-  fi
-}
 
 prompt_secret() {
   local var=$1 desc=$2
@@ -74,8 +64,12 @@ prompt_optional() {
   fi
 }
 
-# ─── 1. Docker ───────────────────────────────────────────────────────────
-step "Checking Docker"
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Required command missing: $1"
+}
+
+# ─── 1. Docker + curl + jq ───────────────────────────────────────────────
+step "Checking host prerequisites"
 if ! command -v docker >/dev/null 2>&1; then
   step "Installing Docker"
   curl -fsSL https://get.docker.com | sh
@@ -83,9 +77,13 @@ if ! command -v docker >/dev/null 2>&1; then
 else
   ok "Docker already present ($(docker --version))"
 fi
-
 if ! docker compose version >/dev/null 2>&1; then
   fail "docker compose plugin missing — run 'apt-get install docker-compose-plugin' or upgrade Docker."
+fi
+require_cmd curl
+if ! command -v jq >/dev/null 2>&1; then
+  step "Installing jq"
+  apt-get update -qq && apt-get install -y -qq jq
 fi
 
 # ─── 2. Prompts ──────────────────────────────────────────────────────────
@@ -95,26 +93,28 @@ prompt_optional API_BASE_URL      "Control plane API URL"           "https://api
 prompt_optional WORKER_CONCURRENCY "Concurrent jobs per worker"     "2"
 prompt_secret   WORKER_TOKEN      "Worker token (wk_live_...)"
 
-step "GHCR credentials (private worker image registry)"
-prompt_required GHCR_USER         "GitHub user for the read-only PAT"
-prompt_secret   GHCR_PAT          "GitHub PAT with read:packages scope"
+# ─── 3. Bootstrap call ───────────────────────────────────────────────────
+step "Fetching registry credentials from ${API_BASE_URL}"
+BOOTSTRAP_URL="${API_BASE_URL%/}/v1/internal/bootstrap"
+BOOTSTRAP_RESPONSE=$(curl -fsS -X POST \
+  -H "X-Worker-Token: ${WORKER_TOKEN}" \
+  -H "content-type: application/json" \
+  "$BOOTSTRAP_URL" \
+  || fail "Bootstrap call failed — is the worker token valid? Is ${BOOTSTRAP_URL} reachable?")
 
-step "Screenshot storage (MinIO/S3) — leave blank to disable"
-prompt_optional S3_ENDPOINT       "S3 endpoint URL"
-S3_REGION=${S3_REGION:-us-east-1}
-S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-true}
-if [[ -n "$S3_ENDPOINT" ]]; then
-  prompt_required S3_BUCKET_SCREENSHOTS "Bucket name"
-  prompt_required S3_ACCESS_KEY_ID      "Access key ID"
-  prompt_secret   S3_SECRET_ACCESS_KEY  "Secret access key"
+GHCR_USER=$(printf '%s' "$BOOTSTRAP_RESPONSE" | jq -r '.ghcr_user // empty')
+GHCR_PAT=$(printf '%s' "$BOOTSTRAP_RESPONSE" | jq -r '.ghcr_pat // empty')
+if [[ -z "$GHCR_USER" || -z "$GHCR_PAT" ]]; then
+  fail "Bootstrap response missing ghcr_user / ghcr_pat — check API GHCR_USERNAME and GHCR_PAT envs."
 fi
+ok "Bootstrap creds received (user: ${GHCR_USER})"
 
-# ─── 3. /opt/scrappy ─────────────────────────────────────────────────────
+# ─── 4. /opt/scrappy ─────────────────────────────────────────────────────
 step "Provisioning ${SCRAPPY_DIR}"
 mkdir -p "$SCRAPPY_DIR"
 chmod 700 "$SCRAPPY_DIR"
 
-# ─── 4. worker.env ───────────────────────────────────────────────────────
+# ─── 5. worker.env ───────────────────────────────────────────────────────
 step "Writing ${WORKER_ENV}"
 umask 077
 cat > "$WORKER_ENV" <<EOF
@@ -127,18 +127,11 @@ API_BASE_URL=${API_BASE_URL}
 WORKER_CONCURRENCY=${WORKER_CONCURRENCY}
 NODE_ENV=production
 LOG_LEVEL=info
-
-S3_ENDPOINT=${S3_ENDPOINT}
-S3_REGION=${S3_REGION}
-S3_BUCKET_SCREENSHOTS=${S3_BUCKET_SCREENSHOTS:-}
-S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
-S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
-S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
 EOF
 chmod 600 "$WORKER_ENV"
 ok "Wrote ${WORKER_ENV} (mode 600)"
 
-# ─── 5. docker-compose.yml ───────────────────────────────────────────────
+# ─── 6. docker-compose.yml ───────────────────────────────────────────────
 step "Writing ${COMPOSE_FILE}"
 cat > "$COMPOSE_FILE" <<EOF
 # Generated by install-worker.sh — re-run the script to regenerate.
@@ -177,19 +170,19 @@ services:
 EOF
 ok "Wrote ${COMPOSE_FILE}"
 
-# ─── 6. GHCR login ───────────────────────────────────────────────────────
+# ─── 7. GHCR login ───────────────────────────────────────────────────────
 step "Authenticating to ghcr.io"
-echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null
 ok "docker login ghcr.io OK"
 
-# ─── 7. Pull + start ─────────────────────────────────────────────────────
+# ─── 8. Pull + start ─────────────────────────────────────────────────────
 step "Pulling worker image"
 docker compose -f "$COMPOSE_FILE" pull
 step "Starting worker + watchtower"
 docker compose -f "$COMPOSE_FILE" up -d
 ok "docker compose up -d done"
 
-# ─── 8. Verify ───────────────────────────────────────────────────────────
+# ─── 9. Verify ───────────────────────────────────────────────────────────
 step "Waiting 6s for boot, then tailing worker log"
 sleep 6
 docker logs scrappy-worker --tail 30 || true
@@ -206,6 +199,9 @@ Useful commands:
 
 To rotate the worker token: edit /opt/scrappy/worker.env, then
   docker compose -f /opt/scrappy/docker-compose.yml restart worker
+
+To rotate the GHCR PAT (after the operator updates it on the control plane):
+  sudo /path/to/install-worker.sh   # re-run, picks up the new bootstrap creds
 
 To uninstall completely:
   docker compose -f /opt/scrappy/docker-compose.yml down
