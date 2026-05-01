@@ -88,9 +88,6 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ─── 2. Prompt ───────────────────────────────────────────────────────────
-step "Worker configuration"
-echo "  api: ${API_BASE_URL}"
-echo "  name: ${WORKER_NAME}    concurrency: ${WORKER_CONCURRENCY}"
 prompt_secret WORKER_TOKEN "Worker token (wk_live_...)"
 
 # ─── 3. Bootstrap call ───────────────────────────────────────────────────
