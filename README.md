@@ -23,9 +23,16 @@ chmod +x install-worker.sh
 sudo ./install-worker.sh
 ```
 
-The script prompts for the worker token, then calls `api.scrappy.hu/v1/internal/bootstrap` to fetch the registry creds. After first install, Watchtower keeps the worker on the latest image automatically — polls every 5 minutes.
+The script prompts for **only one thing**: the worker token. The API URL, worker name (defaults to `hostname`), and concurrency are hardcoded — they're either the same for every prod worker, or get overwritten by the API on identity confirm. After first install, Watchtower keeps the worker on the latest image automatically — polls every 5 minutes.
 
 To re-run with new config (e.g. after a GHCR PAT rotation on the control plane), just run the script again with the same worker token.
+
+For unusual setups (dev/staging API, custom concurrency), env vars override the defaults:
+
+```bash
+sudo WORKER_TOKEN=wk_live_... API_BASE_URL=https://api.staging.scrappy.hu \
+     WORKER_CONCURRENCY=4 ./install-worker.sh
+```
 
 ### `install-runner.sh`
 

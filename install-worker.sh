@@ -19,16 +19,30 @@
 # Usage:
 #   sudo ./install-worker.sh
 #
-# Or non-interactively (useful for re-runs / config management):
-#   sudo WORKER_TOKEN=wk_live_... ./install-worker.sh
+# Only one prompt: the worker token. Everything else is hardcoded — workers
+# in the wild always point at api.scrappy.hu, and the worker's display name
+# comes from the admin UI (the API returns the canonical name on identity
+# confirm, so the local label is irrelevant).
+#
+# Override defaults via env if you really need to (e.g. dev/staging API):
+#   sudo WORKER_TOKEN=wk_live_... API_BASE_URL=https://api.staging.scrappy.hu \
+#        WORKER_CONCURRENCY=4 ./install-worker.sh
 
 set -euo pipefail
 
-# ─── paths ───────────────────────────────────────────────────────────────
+# ─── paths + defaults ────────────────────────────────────────────────────
 SCRAPPY_DIR=/opt/scrappy
 WORKER_ENV="${SCRAPPY_DIR}/worker.env"
 COMPOSE_FILE="${SCRAPPY_DIR}/docker-compose.yml"
 WORKER_IMAGE=ghcr.io/xupegroup/scrappy-worker:latest
+
+# Hardcoded defaults — env-var override stays available for dev/staging.
+API_BASE_URL=${API_BASE_URL:-https://api.scrappy.hu}
+WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
+# Local display name only — the API returns the canonical name on identity
+# confirm, so this just shows up in the first ~1s of logs before the
+# overwrite. Hostname is a sane "where am I" hint for debugging.
+WORKER_NAME=${WORKER_NAME:-$(hostname)}
 
 # ─── pre-flight ──────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
@@ -47,19 +61,6 @@ prompt_secret() {
     read -srp "  ${desc} (input hidden): " val
     echo
     [[ -n "$val" ]] || fail "${desc} is required"
-    printf -v "$var" '%s' "$val"
-  fi
-}
-
-prompt_optional() {
-  local var=$1 desc=$2 default=${3:-}
-  if [[ -z "${!var:-}" ]]; then
-    if [[ -n "$default" ]]; then
-      read -rp "  ${desc} [${default}]: " val
-      val=${val:-$default}
-    else
-      read -rp "  ${desc} (optional, blank to skip): " val
-    fi
     printf -v "$var" '%s' "$val"
   fi
 }
@@ -86,12 +87,11 @@ if ! command -v jq >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y -qq jq
 fi
 
-# ─── 2. Prompts ──────────────────────────────────────────────────────────
+# ─── 2. Prompt ───────────────────────────────────────────────────────────
 step "Worker configuration"
-prompt_optional WORKER_NAME       "Worker name (shown in admin UI)" "$(hostname)"
-prompt_optional API_BASE_URL      "Control plane API URL"           "https://api.scrappy.hu"
-prompt_optional WORKER_CONCURRENCY "Concurrent jobs per worker"     "2"
-prompt_secret   WORKER_TOKEN      "Worker token (wk_live_...)"
+echo "  api: ${API_BASE_URL}"
+echo "  name: ${WORKER_NAME}    concurrency: ${WORKER_CONCURRENCY}"
+prompt_secret WORKER_TOKEN "Worker token (wk_live_...)"
 
 # ─── 3. Bootstrap call ───────────────────────────────────────────────────
 step "Fetching registry credentials from ${API_BASE_URL}"
