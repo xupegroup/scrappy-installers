@@ -142,7 +142,10 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   watchtower:
-    image: containrrr/watchtower:latest
+    # nickfedor/watchtower is the maintained fork — the original
+    # containrrr/watchtower is archived (2023) and chokes on Docker
+    # daemons newer than ~25.x with "client version 1.25 is too old".
+    image: nickfedor/watchtower:latest
     container_name: scrappy-watchtower
     restart: unless-stopped
     volumes:
