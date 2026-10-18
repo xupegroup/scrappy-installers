@@ -137,6 +137,9 @@ services:
     restart: unless-stopped
     env_file: ${WORKER_ENV}
     mem_limit: 2g
+    # The worker drains in-flight jobs for up to 30s on SIGTERM; Docker's
+    # default 10s would cut jobs short on host reboots (unattended-upgrades).
+    stop_grace_period: 40s
     labels:
       # Watchtower picks up only labeled containers.
       - "com.centurylinklabs.watchtower.enable=true"
