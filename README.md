@@ -34,6 +34,10 @@ sudo WORKER_TOKEN=wk_live_... API_BASE_URL=https://api.staging.scrappy.hu \
      WORKER_CONCURRENCY=4 ./install-worker.sh
 ```
 
+### Worker ISO (`iso/`)
+
+An Ubuntu 24.04.5 autoinstall ISO that turns a mini-PC into a Scrappy worker with no installer questions: full-disk LVM, YubiKey-only SSH, unattended upgrades, Docker on first boot. The worker token is still entered once over SSH (`ssh -t kevin@<ip> sudo install-worker.sh`). Build with `make iso` (Docker, works on WSL2). Full guide, in Hungarian: [`docs/iso.md`](docs/iso.md).
+
 ### `install-runner.sh`
 
 Provisions a self-hosted GitHub Actions runner on the production CT. See the [private repo's `docs/RUNNER_SETUP.md`](https://github.com/xupegroup/scrappy/blob/main/docs/RUNNER_SETUP.md) for the full operator playbook.
