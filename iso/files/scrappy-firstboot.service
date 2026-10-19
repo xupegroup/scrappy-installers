@@ -1,0 +1,22 @@
+[Unit]
+Description=Scrappy worker first-boot setup (hostname, Docker)
+Wants=network-online.target
+# Not cloud-final.service: that one is ordered After=multi-user.target, which
+# makes an ordering cycle and systemd silently drops this job.
+After=network-online.target cloud-init.service
+ConditionPathExists=!/var/lib/scrappy/firstboot.done
+# Never give up while waiting for the network (late-plugged cable): no
+# start-rate limit, Restart=on-failure keeps retrying every 30s.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/scrappy-firstboot
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=30min
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
