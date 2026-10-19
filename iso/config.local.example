@@ -1,0 +1,6 @@
+# Copy to iso/config.local (gitignored) and fill in. NEVER commit the real file.
+#
+# yescrypt hash of the `kevin` user's password (console login + sudo).
+# Generate it with:   make passwd-hash
+# Keep the single quotes — the hash contains `$` characters.
+PASSWORD_HASH='$y$j9T$REPLACE_ME'
