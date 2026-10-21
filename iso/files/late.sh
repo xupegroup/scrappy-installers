@@ -13,9 +13,16 @@ T=/target
 install -D -m 0755 "${SRC}/install-worker.sh"          "${T}/usr/local/sbin/install-worker.sh"
 install -D -m 0755 "${SRC}/scrappy-firstboot.sh"       "${T}/usr/local/sbin/scrappy-firstboot"
 install -D -m 0644 "${SRC}/scrappy-firstboot.service"  "${T}/etc/systemd/system/scrappy-firstboot.service"
+install -D -m 0755 "${SRC}/scrappy-register.sh"        "${T}/usr/local/sbin/scrappy-register"
+install -D -m 0644 "${SRC}/scrappy-register.service"   "${T}/etc/systemd/system/scrappy-register.service"
+install -D -m 0755 "${SRC}/scrappy-inventory.sh"       "${T}/usr/local/sbin/scrappy-inventory"
+install -D -m 0644 "${SRC}/scrappy-inventory.service"  "${T}/etc/systemd/system/scrappy-inventory.service"
+install -D -m 0644 "${SRC}/scrappy-inventory.timer"    "${T}/etc/systemd/system/scrappy-inventory.timer"
+install -D -m 0644 "${SRC}/register.env"               "${T}/etc/scrappy/register.env"
 install -D -m 0644 "${SRC}/docker-archive-keyring.asc" "${T}/etc/apt/keyrings/docker.asc"
-install -d -m 0755 "${T}/var/lib/scrappy"
-curtin in-target --target="$T" -- systemctl enable scrappy-firstboot.service
+install -d -m 0700 "${T}/var/lib/scrappy"
+curtin in-target --target="$T" -- systemctl enable \
+  scrappy-firstboot.service scrappy-register.service scrappy-inventory.timer
 
 # ─── network: DHCP on every wired port, none of them blocks boot ────────
 # Written only into /target: no netplan apply runs in the installer (that

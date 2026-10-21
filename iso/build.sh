@@ -21,6 +21,7 @@ ISO_DIR="${SRC}/iso"
 CACHE=/build/cache
 OUT=/out
 GIT_REV=${GIT_REV:-unknown}
+DEFAULT_API_BASE_URL=https://api.scrappy.hu
 
 step() { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
@@ -76,6 +77,25 @@ load_password_hash() {
     || fail "PASSWORD_HASH must be a yescrypt (\$y\$) or sha512 (\$6\$) crypt hash"
   [[ "$PASSWORD_HASH" == *REPLACE_ME* ]] && fail "PASSWORD_HASH is still the example value"
   export PASSWORD_HASH
+}
+
+# API the machines self-register with: iso/config.local API_BASE_URL=,
+# default the production API. Not a secret. http:// only with
+# ALLOW_HTTP_API=1 (local QEMU tests against the CI stack).
+load_api_base_url() {
+  if [[ -z "${API_BASE_URL:-}" && -f "${ISO_DIR}/config.local" ]]; then
+    API_BASE_URL=$(sed -n "s/^API_BASE_URL=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}\$/\1/p" "${ISO_DIR}/config.local")
+  fi
+  API_BASE_URL=${API_BASE_URL:-$DEFAULT_API_BASE_URL}
+  API_BASE_URL=${API_BASE_URL%/}
+  if [[ "$API_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+    :
+  elif [[ "${ALLOW_HTTP_API:-}" == 1 && "$API_BASE_URL" =~ ^http://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
+    printf '\033[1;33m⚠ plain-http API %s (test build only)\033[0m\n' "$API_BASE_URL"
+  else
+    fail "API_BASE_URL must be https://host[:port] (got '${API_BASE_URL}'; http only with ALLOW_HTTP_API=1)"
+  fi
+  export API_BASE_URL
 }
 
 render_autoinstall() {  # dest
@@ -146,8 +166,13 @@ stage_files() {  # work dir
   cp "${ISO_DIR}/grub.cfg" "${w}/grub.cfg"
   cp "${ISO_DIR}/files/pick-disk.sh" "${ISO_DIR}/files/late.sh" \
      "${ISO_DIR}/files/scrappy-firstboot.sh" "${ISO_DIR}/files/scrappy-firstboot.service" \
+     "${ISO_DIR}/files/scrappy-register.sh" "${ISO_DIR}/files/scrappy-register.service" \
+     "${ISO_DIR}/files/scrappy-inventory.sh" "${ISO_DIR}/files/scrappy-inventory.service" \
+     "${ISO_DIR}/files/scrappy-inventory.timer" \
      "${ISO_DIR}/files/docker-archive-keyring.asc" "${SRC}/install-worker.sh" \
      "${w}/scrappy/"
+  printf '# Written at ISO build time (build.sh). Not a secret.\nAPI_BASE_URL=%s\n' "$API_BASE_URL" \
+    > "${w}/scrappy/register.env"
   [[ "$(key_fpr "${w}/scrappy/docker-archive-keyring.asc")" == "$DOCKER_KEY_FPR" ]] \
     || fail "docker-archive-keyring.asc fingerprint mismatch"
   ok "staged files in ${w}"
@@ -166,11 +191,13 @@ case "$cmd" in
     # shellcheck disable=SC2016  # literal dummy hash
     PASSWORD_HASH='$y$j9T$lintlintlintlintlint$lintlintlintlintlintlintlintlintlin'
     export PASSWORD_HASH
+    load_api_base_url
     stage_files /build/lint
     ;;
   iso)
     shellcheck_all
     load_password_hash
+    load_api_base_url
     step "Fetching Ubuntu ${UBUNTU_VERSION}"
     fetch_ubuntu_iso
     verify_ubuntu_iso
@@ -193,7 +220,9 @@ case "$cmd" in
 
     step "Repacking ISO"
     mkdir -p "$OUT"
-    out_iso="${OUT}/scrappy-worker-${UBUNTU_VERSION}-${GIT_REV}.iso"
+    suffix=""
+    [[ "$API_BASE_URL" == "$DEFAULT_API_BASE_URL" ]] || suffix="-devapi"
+    out_iso="${OUT}/scrappy-worker-${UBUNTU_VERSION}-${GIT_REV}${suffix}.iso"
     rm -f "$out_iso"
     xorriso -indev "${CACHE}/${ISO_NAME}" -outdev "$out_iso" \
       -map "${W}/grub.cfg" /boot/grub/grub.cfg \
@@ -204,7 +233,7 @@ case "$cmd" in
       fail "output ISO has a root /autoinstall.yaml"
     fi
     (cd "$OUT" && sha256sum "$(basename "$out_iso")" > "$(basename "$out_iso").sha256")
-    ok "built ${out_iso#/out/}"
+    ok "built ${out_iso#/out/} (API ${API_BASE_URL})"
     ;;
   *)
     fail "usage: build.sh [iso|lint]"

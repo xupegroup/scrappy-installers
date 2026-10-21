@@ -4,3 +4,8 @@
 # Generate it with:   make passwd-hash
 # Keep the single quotes — the hash contains `$` characters.
 PASSWORD_HASH='$y$j9T$REPLACE_ME'
+#
+# API the installed machines self-register with. Optional, default
+# https://api.scrappy.hu. A non-default URL adds "-devapi" to the ISO name;
+# plain http:// needs ALLOW_HTTP_API=1 (local QEMU tests only).
+# API_BASE_URL=https://api.scrappy.hu
