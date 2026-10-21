@@ -7,12 +7,13 @@
 #   2. hostname scrappy-worker-<last 6 hex of the MAC>, only while it is
 #      still the installer placeholder (the API may rename it later)
 #   3. Docker from the official apt repo (key shipped on the ISO)
-#   4. console hint with the token command, then the done-marker
+#   4. done-marker, then hands over to scrappy-register (self-registration:
+#      pairing code on the console, admin approval, token, install-worker)
 #
 # A failure leaves no marker; systemd retries (Restart=on-failure) and the
 # next boot runs it again. Log: journalctl -u scrappy-firstboot
 #
-# The worker token step stays manual in phase 1:
+# Manual fallback (no self-registration):
 #   ssh -t kevin@<ip> sudo install-worker.sh
 
 set -euo pipefail
@@ -79,15 +80,21 @@ EOF
 fi
 log "$(docker --version)"
 
-# ─── 4. console hint + marker ───────────────────────────────────────────
-# agetty expands \n (hostname) and \4 (IPv4) on the login screen.
+# ─── 4. marker, then self-registration ──────────────────────────────────
+# agetty expands \n (hostname) and \4 (IPv4) on the login screen;
+# scrappy-register replaces this with the pairing code once registered.
 install -d /etc/issue.d
 cat > /etc/issue.d/50-scrappy.issue <<'EOF'
 Scrappy worker \n   IP: \4
-Worker token (PowerShell):  ssh -t kevin@\4 sudo install-worker.sh
+Status: registering with the Scrappy API
+Manual install: ssh -t kevin@\4 sudo install-worker.sh
 
 EOF
+agetty --reload 2>/dev/null || true
 
 install -d "$(dirname "$DONE")"
 date --iso-8601=seconds > "$DONE"
-log "done"
+log "done, starting scrappy-register"
+# --no-block: this unit is a oneshot; waiting for the registration loop
+# would keep it "activating" until an admin approves the machine.
+systemctl start --no-block scrappy-register.service

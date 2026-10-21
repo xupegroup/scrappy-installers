@@ -1,0 +1,23 @@
+[Unit]
+Description=Scrappy worker self-registration (waits for admin approval, then installs the worker)
+Wants=network-online.target
+After=network-online.target scrappy-firstboot.service docker.service
+# On the very first boot scrappy-firstboot starts this unit itself once it
+# is done; later boots resume a pending registration here.
+ConditionPathExists=/var/lib/scrappy/firstboot.done
+ConditionPathExists=!/var/lib/scrappy/register.done
+ConditionPathExists=!/var/lib/scrappy/register.stopped
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/scrappy/register.env
+ExecStart=/usr/local/sbin/scrappy-register
+Restart=on-failure
+RestartSec=30
+UMask=0077
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

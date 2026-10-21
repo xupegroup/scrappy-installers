@@ -1,5 +1,5 @@
 [Unit]
-Description=Scrappy worker first-boot setup (hostname, Docker)
+Description=Scrappy worker first-boot setup (hostname, Docker, then self-registration)
 Wants=network-online.target
 # Not cloud-final.service: that one is ordered After=multi-user.target, which
 # makes an ordering cycle and systemd silently drops this job.
