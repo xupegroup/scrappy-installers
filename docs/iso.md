@@ -1,6 +1,6 @@
 # Scrappy worker — autoinstall ISO (Ubuntu 24.04.5)
 
-Pendrive-ra írható ISO, amellyel egy mini-PC-ből kézi telepítés nélkül Scrappy worker lesz. Az 1. fázisban egy kézi lépés marad: a worker-token beadása SSH-n, egy paranccsal.
+Pendrive-ra írható ISO, amellyel egy mini-PC-ből kézi telepítés nélkül Scrappy worker lesz. Első induláskor a gép jelentkezik az API-nál. Az admin felületen (`/admin/workers`) jóváhagyod, és a gép a saját titkával felveszi a worker-tokent. Tokenmásolás és SSH nem kell. A kézi út (`install-worker.sh` + token) tartaléknak megmarad.
 
 > ⚠️ **Az alapértelmezett menüpont kérdés nélkül törli a belső lemezt, ha azon nincs Linux.** A pendrive-ot címkézd fel: „SCRAPPY WORKER – TÖRLI A LEMEZT”.
 
@@ -13,8 +13,10 @@ Pendrive-ra írható ISO, amellyel egy mini-PC-ből kézi telepítés nélkül S
 - `Prompt=never`: nem ajánlja fel a 26.04-re frissítést.
 - A telepítés végén a gép **kikapcsol**. Ez jelzi, hogy kész.
 - Első induláskor a `scrappy-firstboot` beállítja a hostnevet (`scrappy-worker-` + a MAC-cím utolsó 6 hex jegye), és feltelepíti a Dockert a hivatalos apt-repóból.
+- Utána a `scrappy-register` önregisztrál (lásd lent), majd jóváhagyás után lefuttatja az `install-worker.sh`-t.
+- A `scrappy-inventory` a hoston összegyűjti a leltárt (gyártó, CPU, RAM, lemezek, MAC-ek, OS) az `/opt/scrappy/host-info/inventory.json`-ba, bootkor és naponta. A worker ezt küldi a heartbeattel.
 
-Az ISO-ban nincs titok, csak publikus kulcs és a sudo-jelszó hash-e. A worker-token soha nem kerül az ISO-ra.
+Az ISO-ban nincs titok, csak publikus kulcs, a sudo-jelszó hash-e és az API címe. A worker-token soha nem kerül az ISO-ra. A gép a titkát első induláskor maga generálja.
 
 ## Build (WSL2 + Docker)
 
@@ -43,6 +45,10 @@ A build menete:
 4. Xorrisóval újracsomagolja az ISO-t, megtartva a UEFI- és a BIOS-bootot.
 
 A `make lint` letöltés nélkül futtat shellchecket, renderelést és grub-ellenőrzést.
+
+Az API címe, ahová a gépek regisztrálnak, az `iso/config.local` `API_BASE_URL=` sorából jön (alapértelmezés `https://api.scrappy.hu`), vagy parancssorból: `make iso API_BASE_URL=https://...`. Nem titok, a gépen az `/etc/scrappy/register.env`-be kerül.
+- Csak `https://host[:port]` fogadható el. Sima `http://` csak `ALLOW_HTTP_API=1` mellett megy, ez a lokális QEMU-teszthez kell.
+- Ha a cím nem az alapértelmezett, az ISO neve `-devapi` utótagot kap, így egy teszt-ISO nem keverhető össze az élessel.
 
 SSH-kulcsot az `iso/keys/authorized_keys` fájlban lehet hozzáadni, soronként egyet. A `#`-kal kezdődő és az üres sorokat a build kihagyja.
 
@@ -108,14 +114,32 @@ Ennek az oka, hogy egy bent felejtett pendrive egy áramszünet után ne töröl
 1. BIOS, gépenként egyszer: power on after AC loss, és a boot-sorrend (USB, majd belső lemez).
 2. Pendrive be, gép be. 10 mp után indul, kérdés nélkül.
 3. Amikor a gép **magától kikapcsol**: pendrive ki, gép be.
-4. Első induláskor a `scrappy-firstboot` beállítja a hostnevet és feltelepíti a Dockert. Késve bedugott kábellel is kivárja a hálózatot. Utána a konzol login-képernyője kiírja az IP-t és a token-parancsot.
-5. Token beadása PowerShellből:
+4. Első induláskor a `scrappy-firstboot` beállítja a hostnevet és feltelepíti a Dockert. Késve bedugott kábellel is kivárja a hálózatot.
+5. Utána a `scrappy-register` jelentkezik az API-nál. A konzol login-képernyőjén megjelenik a **párosítókód** (`Pairing code: XXXX-XXXX`), a hostnév és az IP.
+6. Az admin felületen (`/admin/workers` → „Registration requests”) megjelenik a kérés. **Jóváhagyás előtt hasonlítsd össze a kódot a gép képernyőjével.** A duplikált MAC, hostnév vagy kód jelvénnyel látszik.
+7. Jóváhagyás után a gép legfeljebb kb. 30 mp-en belül felveszi a tokenjét, és lefuttatja az `install-worker.sh`-t. A konzolon `Status: worker installed and running` áll, a worker megjelenik a flottában.
 
-   ```powershell
-   ssh -t kevin@<ip> sudo install-worker.sh
-   ```
+A konzol `Status:` sora:
 
-   Előbb a sudo-jelszót kéri, majd rejtett promptban a `wk_live_…` tokent.
+| Szöveg | Jelentés | Teendő |
+|---|---|---|
+| `registering with the Scrappy API` | a regisztráció folyamatban | várj |
+| `waiting for approval` + kód | függő kérés (24 óráig) | jóváhagyás az adminban |
+| `self-registration is switched off on the server` | az API-n ki van kapcsolva az önregisztráció | kézi út, vagy várj: 10 percenként újrapróbálja |
+| `approved, installing the worker` | jóváhagyva, telepít | várj |
+| `worker installed and running` | kész | — |
+| `registration REJECTED by an admin` | elutasítva, a gép leállt | újratelepítés, vagy kézi út |
+| `token was already claimed and is lost` | a token elveszett | token-rotálás az adminban, utána kézi út |
+
+Ha a kérés 24 óráig nem kap döntést, vagy a jóváhagyás után 7 napig nem veszi fel a tokent, a gép **új párosítókóddal** újra jelentkezik, és új jóváhagyás kell hozzá.
+
+**Kézi út** (például ha az önregisztráció ki van kapcsolva), PowerShellből:
+
+```powershell
+ssh -t kevin@<ip> sudo install-worker.sh
+```
+
+Előbb a sudo-jelszót kéri, majd rejtett promptban a `wk_live_…` tokent. Ha a worker így települ, a `scrappy-register` magától leáll.
 
 Hibakeresés a gépen:
 
@@ -128,7 +152,17 @@ cat /var/lib/scrappy/firstboot.done
 
 # a telepítő által használt config
 sudo cat /var/log/installer/autoinstall-user-data
+
+# önregisztráció: napló, állapot, API-cím
+journalctl -u scrappy-register
+sudo ls -l /var/lib/scrappy/        # registration.json, register.done / register.stopped
+cat /etc/scrappy/register.env
+
+# leltár (amit a worker a heartbeattel küld)
+cat /opt/scrappy/host-info/inventory.json
 ```
+
+A titok (`/var/lib/scrappy/claim_secret`) és a token csak root számára olvasható. A naplóba egyik sem kerül, és sikeres telepítés után a titok törlődik.
 
 ## Tesztelés Proxmox-VM-ben
 
@@ -148,4 +182,4 @@ qm set <vmid> -args '-drive file=/var/lib/vz/images/<vmid>/usb-test.raw,if=none,
 
 Ellenőrző lista: lásd az Outline-ban a „Scrappy worker – zero-touch telepítő” tervet.
 
-> ⚠️ **A teszt-token éles jobokat vesz fel.** A token-lépés legyen a legutolsó és rövid. Utána **azonnal** töröld a teszt-workert és a tokent az admin felületen, és állítsd le a VM-et.
+> ⚠️ **Egy jóváhagyott teszt-gép éles jobokat vesz fel.** Az éles API ellen futó teszt-VM kérését **utasítsd el**, ne hagyd jóvá. Ha mégis jóvá kell hagyni, utána **azonnal** tiltsd le a teszt-workert az admin felületen, és állítsd le a VM-et. A teljes utat a lokális stack ellen (QEMU, `-devapi` ISO) érdemes tesztelni.
