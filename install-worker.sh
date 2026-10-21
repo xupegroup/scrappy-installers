@@ -8,7 +8,9 @@
 #   3. Calls api.scrappy.hu/v1/internal/bootstrap with that token to fetch
 #      GHCR pull credentials — workers never need direct S3 / registry creds
 #   4. Writes /opt/scrappy/worker.env (mode 600)
-#   5. Writes /opt/scrappy/docker-compose.yml (worker + watchtower)
+#   5. Writes /opt/scrappy/docker-compose.yml (worker + watchtower), with
+#      the host's name and /opt/scrappy/host-info (inventory, host disk)
+#      mounted read-only into the worker
 #   6. docker login ghcr.io with the bootstrap-issued PAT
 #   7. docker compose pull && up -d
 #   8. Tails the worker log briefly to confirm boot
@@ -33,6 +35,7 @@ set -euo pipefail
 # ─── paths + defaults ────────────────────────────────────────────────────
 SCRAPPY_DIR=/opt/scrappy
 WORKER_ENV="${SCRAPPY_DIR}/worker.env"
+HOST_INFO_DIR="${SCRAPPY_DIR}/host-info"
 COMPOSE_FILE="${SCRAPPY_DIR}/docker-compose.yml"
 WORKER_IMAGE=ghcr.io/xupegroup/scrappy-worker:latest
 
@@ -123,6 +126,20 @@ EOF
 chmod 600 "$WORKER_ENV"
 ok "Wrote ${WORKER_ENV} (mode 600)"
 
+# ─── 5b. host-info (inventory + host disk for the worker's metrics) ─────
+# The worker reads inventory.json from here and statfs()es the mount for
+# the host disk usage. scrappy-inventory ships with the autoinstall ISO;
+# on hand-installed hosts the directory just stays empty.
+install -d -m 0755 "$HOST_INFO_DIR"
+if command -v scrappy-inventory >/dev/null 2>&1; then
+  if scrappy-inventory; then
+    ok "Host inventory written to ${HOST_INFO_DIR}"
+  else
+    warn "scrappy-inventory failed, continuing without inventory"
+  fi
+fi
+WORKER_HOSTNAME=$(hostnamectl --static 2>/dev/null || cat /etc/hostname)
+
 # ─── 6. docker-compose.yml ───────────────────────────────────────────────
 step "Writing ${COMPOSE_FILE}"
 cat > "$COMPOSE_FILE" <<EOF
@@ -134,9 +151,16 @@ services:
   worker:
     image: ${WORKER_IMAGE}
     container_name: scrappy-worker
+    # The host's name instead of a random container id.
+    hostname: ${WORKER_HOSTNAME}
     restart: unless-stopped
     env_file: ${WORKER_ENV}
     mem_limit: 2g
+    # tini as PID 1: reaps orphaned Chromium processes and forwards
+    # SIGTERM to node, which drains in-flight jobs.
+    init: true
+    volumes:
+      - ${HOST_INFO_DIR}:/host-info:ro
     # The worker drains in-flight jobs for up to 30s on SIGTERM; Docker's
     # default 10s would cut jobs short on host reboots (unattended-upgrades).
     stop_grace_period: 40s
