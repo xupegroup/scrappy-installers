@@ -59,6 +59,8 @@ Két bevált eszköz:
 - **Rufus:** válaszd ki az ISO-t, és amikor rákérdez, a **„DD Image” módot** válaszd, ne az ISO módot.
 - **Raspberry Pi Imager:** Operating System → **„Use custom”** → az ISO kiválasztása → Storage → a pendrive → Write.
 
+**Írás után ellenőrizd a pendrive-ot.** A telepítő nem vizsgálja a médiát (`fsck.mode=skip`, lásd a GRUB-menüt), így egy hibásan megírt pendrive csak telepítés közbeni hibaként derülne ki. Ezért a **Raspberry Pi Imager** az ajánlott: írás után magától visszaolvassa és ellenőrzi a pendrive-ot („Verifying”). A Rufus DD módban nem ellenőriz; ha azzal írtál, és a telepítés megmagyarázhatatlanul elakad, írd újra a pendrive-ot Imagerrel.
+
 Az ISO elérési útja Windowsból:
 
 ```
